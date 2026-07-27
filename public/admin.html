@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Attendance — Admin Panel</title>
+<link rel="stylesheet" href="style.css" />
+<script>
+  // Chart.js is loaded from a CDN. Some networks (corporate proxies, offline
+  // deployments, ad/CDN blockers) block one CDN domain but not others, so we
+  // try a short list of mirrors in order before giving up. window.chartJsReady
+  // resolves to true once Chart.js is available, or false if every mirror
+  // failed — the app code below checks this instead of assuming Chart exists.
+  window.chartJsReady = new Promise((resolve) => {
+    const sources = [
+      'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js',
+      'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
+      'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js'
+    ];
+    (function tryLoad(i) {
+      if (i >= sources.length) { resolve(false); return; }
+      const s = document.createElement('script');
+      s.src = sources[i];
+      s.onload = () => resolve(true);
+      s.onerror = () => tryLoad(i + 1);
+      document.head.appendChild(s);
+    })(0);
+  });
+</script>
+<script>
+  (function() {
+    var saved = localStorage.getItem('theme');
+    var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  })();
+</script>
+</head>
+<body>
+
+<div id="loginScreen" class="center-screen">
+  <div class="card wrap narrow" style="width:100%;">
+    <h2>Admin Login</h2>
+    <div id="loginMsg"></div>
+    <div class="grid" style="gap:14px;">
+      <div>
+        <label>Username or Email</label>
+        <input id="loginUser" placeholder="admin" />
+      </div>
+      <div>
+        <label>Password</label>
+        <input id="loginPw" type="password" placeholder="••••••••" />
+      </div>
+      <button class="btn" onclick="doLogin()">Log In</button>
+    </div>
+    <p class="muted" style="margin-top:10px;">First time? Run <code>node seed.js</code> on the server, then log in with the printed credentials.</p>
+  </div>
+</div>
+
+<div id="appScreen" class="hidden">
+  <div class="topbar">
+    <h1>GPS Attendance — Admin Panel</h1>
+    <div>
+      <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()">Dark mode</button>
+      <button onclick="logout()">Log out</button>
+    </div>
+  </div>
+  <div class="wrap">
+
+    <div class="tabs">
+      <div class="tab active" data-tab="dashboard">Dashboard</div>
+      <div class="tab" data-tab="attendance">Attendance & Reports</div>
+      <div class="tab" data-tab="analytics">Analytics</div>
+      <div class="tab" data-tab="employees">Employees</div>
+      <div class="tab" data-tab="offices">Office Locations</div>
+      <div class="tab" data-tab="auditlog">Audit Log</div>
+      <div class="tab hidden" id="adminsTab" data-tab="admins">Admins</div>
+    </div>
+
+    <!-- DASHBOARD TAB -->
+    <div id="tab-dashboard">
+      <div class="grid cols-4" style="margin-bottom:16px;">
+        <div class="stat"><div class="num" id="dashEmployees">0</div><div class="lbl">Active Employees</div></div>
+        <div class="stat"><div class="num" id="dashOffices">0</div><div class="lbl">Offices</div></div>
+        <div class="stat"><div class="num" id="dashPresent">0</div><div class="lbl">Present Today</div></div>
+        <div class="stat"><div class="num" id="dashLate">0</div><div class="lbl">Late Today</div></div>
+      </div>
+
+      <div class="grid cols-2" style="align-items:start;">
+        <div class="card">
+          <h2>Today's Status</h2>
+          <div style="position:relative;height:260px;">
+            <canvas id="dashTodayChart"></canvas>
+          </div>
+          <p class="muted hidden" id="dashTodayEmpty" style="margin-top:8px;"></p>
+        </div>
+        <div class="card">
+          <h2>Last 7 Days Trend</h2>
+          <div style="position:relative;height:260px;">
+            <canvas id="dashTrendChart"></canvas>
+          </div>
+          <p class="muted hidden" id="dashTrendEmpty" style="margin-top:8px;">No punch records in the last 7 days yet — add employees and have them punch in to see the trend.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <button class="btn secondary" onclick="loadDashboardOverview()">Refresh Dashboard</button>
+      </div>
+    </div>
+
+    <!-- ATTENDANCE TAB -->
+    <div id="tab-attendance" class="hidden">
+      <div class="card">
+        <h2>Filters</h2>
+        <div class="grid cols-4">
+          <div><label>Date</label><input type="date" id="fDate" /></div>
+          <div><label>Month</label><input type="month" id="fMonth" /></div>
+          <div><label>Department</label><input id="fDept" list="deptList" placeholder="e.g. Sales" /><datalist id="deptList"></datalist></div>
+          <div><label>Employee</label><select id="fEmp"><option value="">All</option></select></div>
+        </div>
+        <div class="grid cols-4" style="margin-top:12px;">
+          <div><label>From Date</label><input type="date" id="fFromDate" /></div>
+          <div><label>To Date</label><input type="date" id="fToDate" /></div>
+        </div>
+        <div class="muted" style="margin-top:6px;">Tip: use From/To Date for a date-to-date range report. Leave Date/Month empty when using a range.</div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn" onclick="loadAttendance()">Apply Filters</button>
+          <button class="btn secondary" onclick="clearFilters()">Clear</button>
+          <button class="btn secondary" onclick="exportExcel()">Download Excel</button>
+          <button class="btn secondary" onclick="exportPDF()">Download PDF</button>
+        </div>
+      </div>
+
+      <div class="grid cols-3" style="margin-bottom:16px;">
+        <div class="stat"><div class="num" id="sPresent">0</div><div class="lbl">Present</div></div>
+        <div class="stat"><div class="num" id="sLate">0</div><div class="lbl">Late</div></div>
+        <div class="stat"><div class="num" id="sAbsent">0</div><div class="lbl">Absent</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Punch Records</h2>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Employee</th><th>Dept</th><th>Date</th><th>First In</th><th>Last Out</th><th>Sessions</th><th>Total Hours</th><th>Status</th><th>Office</th></tr></thead>
+          <tbody id="attBody"></tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="card" id="absentCard">
+        <h2>Absent (selected date)</h2>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Employee</th><th>Dept</th></tr></thead>
+          <tbody id="absentBody"></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANALYTICS TAB -->
+    <div id="tab-analytics" class="hidden">
+      <div class="card">
+        <h2>Attendance Analytics</h2>
+        <p class="muted">Uses the same Date / Month / From-To / Department / Employee filters set on the Attendance & Reports tab.</p>
+        <button class="btn" onclick="loadAnalytics()">Refresh Analytics</button>
+      </div>
+
+      <div class="card">
+        <h2>Daily Trend (Present / Late / Absent)</h2>
+        <div style="position:relative;height:320px;">
+          <canvas id="chartTrend"></canvas>
+        </div>
+        <p class="muted hidden" id="chartTrendEmpty" style="margin-top:8px;">No punch records match the current filters.</p>
+      </div>
+
+      <div class="grid cols-2" style="align-items:start;">
+        <div class="card">
+          <h2>Overall Distribution</h2>
+          <div style="position:relative;height:280px;">
+            <canvas id="chartDistribution"></canvas>
+          </div>
+          <p class="muted hidden" id="chartDistributionEmpty" style="margin-top:8px;">No data to summarize yet.</p>
+        </div>
+        <div class="card">
+          <h2>By Department</h2>
+          <div style="position:relative;height:280px;">
+            <canvas id="chartDepartment"></canvas>
+          </div>
+          <p class="muted hidden" id="chartDepartmentEmpty" style="margin-top:8px;">No department data to compare yet.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Employee-wise Attendance % (ranked)</h2>
+        <p class="muted" id="empRankNote"></p>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Absent</th><th>Attendance %</th></tr></thead>
+          <tbody id="empRankBody"></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- EMPLOYEES TAB -->
+    <div id="tab-employees" class="hidden">
+      <div class="card">
+        <h2>Add Employee</h2>
+        <div id="empMsg"></div>
+        <div class="grid cols-3">
+          <div><label>Employee ID</label><input id="eCode" placeholder="EMP001" /></div>
+          <div><label>Name</label><input id="eName" placeholder="Full name" /></div>
+          <div><label>Mobile</label><input id="eMobile" placeholder="01700000000" /></div>
+          <div><label>Password</label><input id="ePassword" type="text" placeholder="Temp password" /></div>
+          <div><label>Department</label><input id="eDept" placeholder="e.g. Sales" /></div>
+          <div><label>Designation</label><input id="eDesig" placeholder="e.g. Executive" /></div>
+          <div><label>Joining Date</label><input type="date" id="eJoin" /></div>
+          <div><label>Office</label><select id="eOffice"></select></div>
+        </div>
+        <button class="btn superadmin-only-inline" style="margin-top:12px;" onclick="addEmployee()">Add Employee</button>
+      </div>
+
+      <div class="card superadmin-only" id="bulkImportCard">
+        <h2>Bulk Import Employees (CSV)</h2>
+        <p class="muted">Columns: <code>employeeCode, name, mobile, password, department, designation, joiningDate, officeName</code>. Office names must match an existing office exactly (case-insensitive).</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn secondary" onclick="downloadCsvTemplate()">Download Template</button>
+          <input type="file" id="bulkCsvFile" accept=".csv" style="display:none;" onchange="handleBulkCsv(event)" />
+          <button class="btn" onclick="document.getElementById('bulkCsvFile').click()">Choose CSV & Import</button>
+        </div>
+        <div id="bulkImportMsg" style="margin-top:12px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>Employees</h2>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Name</th><th>Mobile</th><th>Dept</th><th>Office</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="empBody"></tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="historyCard">
+        <h2 id="historyTitle">Punch History</h2>
+        <div class="grid cols-4">
+          <div><label>From Date</label><input type="date" id="hFromDate" /></div>
+          <div><label>To Date</label><input type="date" id="hToDate" /></div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn" onclick="reloadPunchHistory()">Apply</button>
+          <button class="btn secondary" onclick="clearPunchHistoryFilter()">Clear</button>
+          <button class="btn secondary" onclick="hide('historyCard')">Close</button>
+        </div>
+        <div class="table-wrap">
+        <table style="margin-top:14px;">
+          <thead><tr><th>Date</th><th>Punch In</th><th>Punch Out</th><th>Session Duration</th><th>Day Status</th></tr></thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- OFFICES TAB -->
+    <div id="tab-offices" class="hidden">
+      <div class="card">
+        <h2>Add Office Location</h2>
+        <div id="offMsg"></div>
+        <div class="grid cols-3">
+          <div><label>Office Name</label><input id="oName" placeholder="Main Office" /></div>
+          <div><label>Latitude</label><input id="oLat" placeholder="23.780636" /></div>
+          <div><label>Longitude</label><input id="oLng" placeholder="90.279541" /></div>
+          <div><label>Allowed Radius (m)</label><input id="oRadius" placeholder="150" /></div>
+          <div><label>Office Start Time</label><input type="time" id="oStart" value="09:00" /></div>
+          <div><label>Grace (minutes)</label><input id="oGrace" placeholder="15" /></div>
+        </div>
+        <div class="muted" style="margin-top:8px;">Tip: open Google Maps, right-click your office location, and copy the coordinates shown.</div>
+        <button class="btn superadmin-only-inline" style="margin-top:12px;" onclick="addOffice()">Add Office</button>
+      </div>
+
+      <div class="card">
+        <h2>Offices</h2>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Lat</th><th>Lng</th><th>Radius (m)</th><th>Start</th><th>Grace (min)</th><th>Actions</th></tr></thead>
+          <tbody id="offBody"></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- AUDIT LOG TAB -->
+    <div id="tab-auditlog" class="hidden">
+      <div class="card">
+        <h2>Filters</h2>
+        <div class="grid cols-4">
+          <div><label>From Date</label><input type="date" id="alFromDate" /></div>
+          <div><label>To Date</label><input type="date" id="alToDate" /></div>
+          <div><label>Action</label><input id="alAction" placeholder="e.g. Add Employee" list="alActionList" /><datalist id="alActionList"></datalist></div>
+          <div style="display:flex;align-items:flex-end;gap:8px;">
+            <button class="btn" onclick="loadAuditLog()">Apply</button>
+            <button class="btn secondary" onclick="clearAuditFilters()">Clear</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Recent Activity</h2>
+        <p class="muted" id="auditCountNote"></p>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Details</th></tr></thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMINS TAB (superadmin only) -->
+    <div id="tab-admins" class="hidden">
+      <div class="card">
+        <h2>Add Admin</h2>
+        <div id="adminMsg"></div>
+        <div class="grid cols-4">
+          <div><label>Username</label><input id="aUsername" placeholder="e.g. jsmith" /></div>
+          <div><label>Email</label><input id="aEmail" placeholder="optional" /></div>
+          <div><label>Password</label><input id="aPassword" type="text" placeholder="Temp password" /></div>
+          <div>
+            <label>Role</label>
+            <select id="aRole">
+              <option value="manager">Manager (view + reports only)</option>
+              <option value="superadmin">Super Admin (full access)</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" style="margin-top:12px;" onclick="addAdmin()">Add Admin</button>
+      </div>
+
+      <div class="card">
+        <h2>Admin Accounts</h2>
+        <p class="muted">Super Admins can manage employees, offices, other admins, and bulk imports. Managers can view dashboards, reports, analytics, and the audit log, but cannot change data.</p>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="adminsBody"></tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = '/api/admin';
+let token = localStorage.getItem('admin_token');
+let employeesCache = [];
+let officesCache = [];
+let currentAdminRole = localStorage.getItem('admin_role') || 'superadmin';
+
+function isSuperAdmin() { return currentAdminRole === 'superadmin'; }
+
+// Hides/disables controls that only a Super Admin should use. Called once
+// after login/auto-login. Managers can still see everything read-only.
+function applyRolePermissions() {
+  const superadmin = isSuperAdmin();
+  document.getElementById('adminsTab').classList.toggle('hidden', !superadmin);
+  document.querySelectorAll('.superadmin-only').forEach((el) => {
+    el.classList.toggle('hidden', !superadmin);
+  });
+  document.querySelectorAll('.superadmin-only-inline').forEach((el) => {
+    if (superadmin) { el.removeAttribute('disabled'); el.title = ''; }
+    else { el.setAttribute('disabled', 'disabled'); el.title = 'Requires Super Admin role'; }
+  });
+}
+
+async function applyChartTheme() {
+  const ok = await window.chartJsReady; // waits for the CDN loader (see <head>) to finish, including fallbacks
+  if (!ok || typeof Chart === 'undefined') return; // every Chart.js source failed — don't break the rest of the app
+  const ink = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#16231f';
+  const line = getComputedStyle(document.documentElement).getPropertyValue('--line').trim() || '#dde3df';
+  Chart.defaults.color = ink;
+  Chart.defaults.borderColor = line;
+}
+
+// Shows a clear diagnostic message in a chart's empty-state <p> when Chart.js
+// itself never loaded, instead of silently leaving a blank canvas (which is
+// indistinguishable from "no data yet").
+function showChartsUnavailable(emptyElId) {
+  const el = document.getElementById(emptyElId);
+  if (!el) return;
+  el.textContent = 'Chart could not load — Chart.js failed to load from every configured CDN (likely blocked by a firewall/proxy or no internet access). Other data on this page is unaffected.';
+  el.classList.remove('hidden');
+}
+
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', 'light');
+    document.getElementById('themeToggleBtn').textContent = 'Dark mode';
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('theme', 'dark');
+    document.getElementById('themeToggleBtn').textContent = 'Light mode';
+  }
+  applyChartTheme();
+  const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+  if (activeTab === 'dashboard') loadDashboardOverview();
+  if (activeTab === 'analytics') loadAnalytics();
+}
+
+function show(el) { document.getElementById(el).classList.remove('hidden'); }
+function hide(el) { document.getElementById(el).classList.add('hidden'); }
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      ...(opts.headers || {})
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPw').value;
+  const msg = document.getElementById('loginMsg');
+  msg.innerHTML = '';
+  try {
+    const data = await api('/login', { method: 'POST', body: { username, password } });
+    token = data.token;
+    currentAdminRole = data.admin.role || 'superadmin';
+    localStorage.setItem('admin_token', token);
+    localStorage.setItem('admin_role', currentAdminRole);
+    enterApp();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  }
+}
+
+function logout() {
+  localStorage.removeItem('admin_token');
+  localStorage.removeItem('admin_role');
+  token = null;
+  hide('appScreen');
+  show('loginScreen');
+}
+
+async function enterApp() {
+  hide('loginScreen');
+  show('appScreen');
+  document.getElementById('themeToggleBtn').textContent =
+    document.documentElement.getAttribute('data-theme') === 'dark' ? 'Light mode' : 'Dark mode';
+  applyRolePermissions();
+  await loadOffices();
+  await loadEmployees();
+  const today = localDateStr();
+  document.getElementById('fFromDate').value = today.slice(0, 8) + '01'; // first of current month
+  document.getElementById('fToDate').value = today;
+  await loadAttendance();
+  setupTabs();
+  applyChartTheme();
+  await loadDashboardOverview();
+}
+
+function setupTabs() {
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      ['dashboard', 'attendance', 'analytics', 'employees', 'offices', 'auditlog', 'admins'].forEach(name => {
+        document.getElementById('tab-' + name).classList.toggle('hidden', name !== tab.dataset.tab);
+      });
+      if (tab.dataset.tab === 'analytics') loadAnalytics();
+      if (tab.dataset.tab === 'dashboard') loadDashboardOverview();
+      if (tab.dataset.tab === 'auditlog') loadAuditLog();
+      if (tab.dataset.tab === 'admins' && isSuperAdmin()) loadAdmins();
+    });
+  });
+}
+
+function badgeClass(status) {
+  if (status === 'Present') return 'present';
+  if (status === 'Late') return 'late';
+  if (status === 'Absent') return 'absent';
+  return '';
+}
+
+/* ---------- Offices ---------- */
+async function loadOffices() {
+  officesCache = await api('/offices');
+  document.getElementById('offBody').innerHTML = officesCache.map(o => `
+    <tr>
+      <td>${o.name}</td><td>${o.latitude}</td><td>${o.longitude}</td>
+      <td>${o.radiusMeters}</td><td>${o.startTime}</td><td>${o.graceMinutes}</td>
+      <td><button class="btn danger superadmin-only-inline" style="padding:5px 9px;font-size:12px;" onclick="deleteOffice(${o.id}, '${o.name.replace(/'/g, "\\'")}')">Delete</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="muted">No offices yet.</td></tr>';
+
+  const sel = document.getElementById('eOffice');
+  sel.innerHTML = officesCache.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+}
+
+async function addOffice() {
+  const msg = document.getElementById('offMsg');
+  msg.innerHTML = '';
+  const body = {
+    name: document.getElementById('oName').value.trim(),
+    latitude: document.getElementById('oLat').value,
+    longitude: document.getElementById('oLng').value,
+    radiusMeters: document.getElementById('oRadius').value,
+    startTime: document.getElementById('oStart').value,
+    graceMinutes: document.getElementById('oGrace').value || 0
+  };
+  try {
+    await api('/offices', { method: 'POST', body });
+    msg.innerHTML = '<div class="msg success">Office added.</div>';
+    ['oName','oLat','oLng','oRadius','oGrace'].forEach(id => document.getElementById(id).value = '');
+    await loadOffices();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  }
+}
+
+async function deleteOffice(id, name) {
+  if (!confirm(`Delete office location "${name}"? This cannot be undone.`)) return;
+  try {
+    await api(`/offices/${id}`, { method: 'DELETE' });
+    await loadOffices();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+/* ---------- Employees ---------- */
+async function loadEmployees() {
+  employeesCache = await api('/employees');
+  const officeName = (id) => officesCache.find(o => o.id === id)?.name || '—';
+
+  document.getElementById('empBody').innerHTML = employeesCache.map(e => `
+    <tr>
+      <td>${e.employeeCode}</td><td>${e.name}</td><td>${e.mobile}</td><td>${e.department || '—'}</td>
+      <td>${officeName(e.officeId)}</td>
+      <td><span class="badge ${e.active ? 'present' : 'inactive'}">${e.active ? 'Active' : 'Inactive'}</span></td>
+      <td style="white-space:nowrap;">
+        <button class="btn secondary" style="padding:5px 9px;font-size:12px;" onclick="viewPunchHistory(${e.id})">Punch History</button>
+        <button class="btn secondary superadmin-only-inline" style="padding:5px 9px;font-size:12px;" onclick="resetPassword(${e.id})">Reset PW</button>
+        <button class="btn secondary superadmin-only-inline" style="padding:5px 9px;font-size:12px;" onclick="unlockDevice(${e.id})">Unlock device</button>
+        <button class="btn danger superadmin-only-inline" style="padding:5px 9px;font-size:12px;" onclick="toggleActive(${e.id}, ${e.active})">${e.active ? 'Deactivate' : 'Activate'}</button>
+        <button class="btn danger superadmin-only-inline" style="padding:5px 9px;font-size:12px;" onclick="deleteEmployee(${e.id}, '${e.name.replace(/'/g, "\\'")}')">Delete</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="muted">No employees yet.</td></tr>';
+
+  const sel = document.getElementById('fEmp');
+  sel.innerHTML = '<option value="">All</option>' + employeesCache.map(e => `<option value="${e.id}">${e.name} (${e.employeeCode})</option>`).join('');
+
+  const depts = [...new Set(employeesCache.map(e => e.department).filter(Boolean))].sort();
+  document.getElementById('deptList').innerHTML = depts.map(d => `<option value="${d}"></option>`).join('');
+  applyRolePermissions();
+}
+
+async function addEmployee() {
+  const msg = document.getElementById('empMsg');
+  msg.innerHTML = '';
+  const body = {
+    employeeCode: document.getElementById('eCode').value.trim(),
+    name: document.getElementById('eName').value.trim(),
+    mobile: document.getElementById('eMobile').value.trim(),
+    password: document.getElementById('ePassword').value,
+    department: document.getElementById('eDept').value.trim(),
+    designation: document.getElementById('eDesig').value.trim(),
+    joiningDate: document.getElementById('eJoin').value,
+    officeId: document.getElementById('eOffice').value
+  };
+  if (!body.officeId) {
+    msg.innerHTML = '<div class="msg error">Add an office location first (Office Locations tab).</div>';
+    return;
+  }
+  try {
+    await api('/employees', { method: 'POST', body });
+    msg.innerHTML = '<div class="msg success">Employee added.</div>';
+    ['eCode','eName','eMobile','ePassword','eDept','eDesig','eJoin'].forEach(id => document.getElementById(id).value = '');
+    await loadEmployees();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  }
+}
+
+async function toggleActive(id, currentlyActive) {
+  if (currentlyActive) {
+    await api(`/employees/${id}`, { method: 'DELETE' }); // deactivates
+  } else {
+    await api(`/employees/${id}`, { method: 'PUT', body: { active: true } });
+  }
+  await loadEmployees();
+}
+
+async function deleteEmployee(id, name) {
+  if (!confirm(`Permanently delete ${name}? This cannot be undone. If they have any attendance history, deletion will be blocked — deactivate them instead in that case.`)) return;
+  try {
+    await api(`/employees/${id}/permanent`, { method: 'DELETE' });
+    await loadEmployees();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function resetPassword(id) {
+  const newPassword = prompt('Enter a new temporary password for this employee:');
+  if (!newPassword) return;
+  await api(`/employees/${id}/reset-password`, { method: 'POST', body: { newPassword } });
+  alert('Password reset. Share it with the employee securely.');
+}
+
+async function unlockDevice(id) {
+  await api(`/employees/${id}/unlock-device`, { method: 'POST' });
+  alert('Device lock cleared — employee can now log in from a new phone.');
+}
+
+/* ---------- Employee Punch History ---------- */
+let historyEmployeeId = null;
+
+async function viewPunchHistory(employeeId) {
+  historyEmployeeId = employeeId;
+  document.getElementById('hFromDate').value = '';
+  document.getElementById('hToDate').value = '';
+  show('historyCard');
+  document.getElementById('historyCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  await reloadPunchHistory();
+}
+
+function clearPunchHistoryFilter() {
+  document.getElementById('hFromDate').value = '';
+  document.getElementById('hToDate').value = '';
+  reloadPunchHistory();
+}
+
+async function reloadPunchHistory() {
+  if (historyEmployeeId == null) return;
+  const params = new URLSearchParams();
+  const fromDate = document.getElementById('hFromDate').value;
+  const toDate = document.getElementById('hToDate').value;
+  if (fromDate) params.set('fromDate', fromDate);
+  if (toDate) params.set('toDate', toDate);
+
+  try {
+    const data = await api(`/employees/${historyEmployeeId}/punch-history?` + params.toString());
+    document.getElementById('historyTitle').textContent =
+      `Punch History — ${data.employee.name} (${data.employee.employeeCode})`;
+    document.getElementById('historyBody').innerHTML = data.rows.map(r => `
+      <tr>
+        <td>${r.date}</td>
+        <td>${r.punchInTime || '--:--'}</td>
+        <td>${r.punchOutTime || 'still in'}</td>
+        <td>${r.durationWorked}</td>
+        <td>${r.status ? `<span class="badge ${badgeClass(r.status)}">${r.status}</span>` : '<span class="muted">—</span>'}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="5" class="muted">No punch records for this employee yet.</td></tr>';
+  } catch (e) {
+    document.getElementById('historyBody').innerHTML = `<tr><td colspan="5" class="msg error">${e.message}</td></tr>`;
+  }
+}
+
+/* ---------- Attendance ---------- */
+function clearFilters() {
+  document.getElementById('fDate').value = '';
+  document.getElementById('fMonth').value = '';
+  document.getElementById('fDept').value = '';
+  document.getElementById('fEmp').value = '';
+  document.getElementById('fFromDate').value = '';
+  document.getElementById('fToDate').value = '';
+  loadAttendance();
+}
+
+function buildQuery() {
+  const params = new URLSearchParams();
+  const date = document.getElementById('fDate').value;
+  const month = document.getElementById('fMonth').value;
+  const dept = document.getElementById('fDept').value.trim();
+  const emp = document.getElementById('fEmp').value;
+  const fromDate = document.getElementById('fFromDate').value;
+  const toDate = document.getElementById('fToDate').value;
+  if (date) params.set('date', date);
+  if (month) params.set('month', month);
+  if (fromDate) params.set('fromDate', fromDate);
+  if (toDate) params.set('toDate', toDate);
+  if (dept) params.set('department', dept);
+  if (emp) params.set('employeeId', emp);
+  return params.toString();
+}
+
+async function loadAttendance() {
+  const q = buildQuery();
+  const data = await api('/attendance?' + q);
+  document.getElementById('sPresent').textContent = data.summary.present;
+  document.getElementById('sLate').textContent = data.summary.late;
+  document.getElementById('sAbsent').textContent = data.summary.absent;
+
+  document.getElementById('attBody').innerHTML = data.rows.map(r => `
+    <tr>
+      <td>${r.employeeName} (${r.employeeCode})</td>
+      <td>${r.department || '—'}</td>
+      <td>${r.date}</td>
+      <td>${r.punchInTime || '--:--'}</td>
+      <td>${r.punchOutTime || 'still in'}</td>
+      <td>${r.sessionCount}</td>
+      <td>${r.totalWorked}</td>
+      <td><span class="badge ${badgeClass(r.status)}">${r.status}</span></td>
+      <td>${r.officeName || '—'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="9" class="muted">No punch records for this filter.</td></tr>';
+
+  const absentCard = document.getElementById('absentCard');
+  const dateSet = !!document.getElementById('fDate').value;
+  absentCard.classList.toggle('hidden', !dateSet);
+  document.getElementById('absentBody').innerHTML = (data.absentees || []).map(a => `
+    <tr><td>${a.employeeName} (${a.employeeCode})</td><td>${a.department || '—'}</td></tr>
+  `).join('') || '<tr><td colspan="2" class="muted">No absentees 🎉</td></tr>';
+}
+
+function downloadReport(endpoint, filename) {
+  const q = buildQuery();
+  // Export endpoints need the auth header, so fetch as blob then trigger download.
+  fetch(API + endpoint + '?' + q, { headers: { Authorization: 'Bearer ' + token } })
+    .then(res => {
+      if (!res.ok) throw new Error('Export failed');
+      return res.blob();
+    })
+    .then(blob => {
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+    })
+    .catch(e => alert(e.message));
+}
+
+function exportExcel() {
+  downloadReport('/attendance/export', 'attendance_report.xlsx');
+}
+
+function exportPDF() {
+  downloadReport('/attendance/export-pdf', 'attendance_report.pdf');
+}
+
+/* ---------- Dashboard ---------- */
+let dashTodayChart, dashTrendChart;
+
+// Returns YYYY-MM-DD for a Date using LOCAL calendar fields (not UTC), so it
+// lines up with the server's todayDateStr(), which also uses local fields.
+// (toISOString() converts to UTC first, which silently shifts by a day for
+// part of every day in any timezone ahead of UTC, e.g. Asia/Dhaka.)
+function localDateStr(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function isoDaysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return localDateStr(d);
+}
+
+async function loadDashboardOverview() {
+  const today = localDateStr();
+
+  document.getElementById('dashEmployees').textContent = employeesCache.filter(e => e.active).length;
+  document.getElementById('dashOffices').textContent = officesCache.length;
+
+  const todayData = await api('/attendance?date=' + today);
+  document.getElementById('dashPresent').textContent = todayData.summary.present;
+  document.getElementById('dashLate').textContent = todayData.summary.late;
+
+  const chartsOk = await window.chartJsReady;
+  if (!chartsOk) {
+    showChartsUnavailable('dashTodayEmpty');
+    showChartsUnavailable('dashTrendEmpty');
+  } else {
+    const ctxToday = document.getElementById('dashTodayChart');
+    try {
+      if (dashTodayChart) dashTodayChart.destroy();
+      dashTodayChart = new Chart(ctxToday, {
+        type: 'doughnut',
+        data: {
+          labels: ['Present', 'Late', 'Absent'],
+          datasets: [{
+            data: [todayData.summary.present, todayData.summary.late, todayData.summary.absent],
+            backgroundColor: [CHART_COLORS.present, CHART_COLORS.late, CHART_COLORS.absent]
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
+      });
+    } catch (e) { console.error('Chart render failed:', e); showChartsUnavailable('dashTodayEmpty'); }
+  }
+
+  const trendData = await api('/attendance/analytics?fromDate=' + isoDaysAgo(6) + '&toDate=' + today);
+  if (chartsOk) {
+    const hasTrendData = trendData.daily.some(d => d.present || d.late || d.absent);
+    document.getElementById('dashTrendEmpty').classList.toggle('hidden', hasTrendData);
+    const ctxTrend = document.getElementById('dashTrendChart');
+    try {
+      if (dashTrendChart) dashTrendChart.destroy();
+      dashTrendChart = new Chart(ctxTrend, {
+        type: 'line',
+        data: {
+          labels: trendData.daily.map(d => d.date),
+          datasets: [
+            { label: 'Present', data: trendData.daily.map(d => d.present), borderColor: CHART_COLORS.present, backgroundColor: CHART_COLORS.present, tension: 0.3 },
+            { label: 'Late', data: trendData.daily.map(d => d.late), borderColor: CHART_COLORS.late, backgroundColor: CHART_COLORS.late, tension: 0.3 },
+            { label: 'Absent', data: trendData.daily.map(d => d.absent), borderColor: CHART_COLORS.absent, backgroundColor: CHART_COLORS.absent, tension: 0.3 }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          plugins: { legend: { position: 'bottom' } }
+        }
+      });
+    } catch (e) { console.error('Chart render failed:', e); showChartsUnavailable('dashTrendEmpty'); }
+  }
+}
+
+/* ---------- Analytics ---------- */
+let trendChart, distributionChart, departmentChart;
+const CHART_COLORS = { present: '#2e9e5b', late: '#e0a422', absent: '#d9534f' };
+
+async function loadAnalytics() {
+  const q = buildQuery();
+  const data = await api('/attendance/analytics?' + q);
+  renderEmployeeRanking(data.byEmployee, data.totalWorkingDays);
+  const chartsOk = await window.chartJsReady;
+  if (!chartsOk) {
+    showChartsUnavailable('chartTrendEmpty');
+    showChartsUnavailable('chartDistributionEmpty');
+    showChartsUnavailable('chartDepartmentEmpty');
+    return;
+  }
+  try { renderTrendChart(data.daily); } catch (e) { console.error('Chart render failed:', e); showChartsUnavailable('chartTrendEmpty'); }
+  try { renderDistributionChart(data.totals); } catch (e) { console.error('Chart render failed:', e); showChartsUnavailable('chartDistributionEmpty'); }
+  try { renderDepartmentChart(data.byDepartment); } catch (e) { console.error('Chart render failed:', e); showChartsUnavailable('chartDepartmentEmpty'); }
+}
+
+function toggleEmpty(id, isEmpty) {
+  document.getElementById(id).classList.toggle('hidden', !isEmpty);
+}
+
+function renderTrendChart(daily) {
+  const ctx = document.getElementById('chartTrend');
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: daily.map(d => d.date),
+      datasets: [
+        { label: 'Present', data: daily.map(d => d.present), backgroundColor: CHART_COLORS.present },
+        { label: 'Late', data: daily.map(d => d.late), backgroundColor: CHART_COLORS.late },
+        { label: 'Absent', data: daily.map(d => d.absent), backgroundColor: CHART_COLORS.absent }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+  toggleEmpty('chartTrendEmpty', daily.every(d => !d.present && !d.late && !d.absent));
+}
+
+function renderDistributionChart(totals) {
+  const ctx = document.getElementById('chartDistribution');
+  if (distributionChart) distributionChart.destroy();
+  distributionChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Present', 'Late', 'Absent'],
+      datasets: [{
+        data: [totals.present, totals.late, totals.absent],
+        backgroundColor: [CHART_COLORS.present, CHART_COLORS.late, CHART_COLORS.absent]
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+  toggleEmpty('chartDistributionEmpty', !totals.present && !totals.late && !totals.absent);
+}
+
+function renderDepartmentChart(byDepartment) {
+  const ctx = document.getElementById('chartDepartment');
+  if (departmentChart) departmentChart.destroy();
+  departmentChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: byDepartment.map(d => d.department),
+      datasets: [
+        { label: 'Present', data: byDepartment.map(d => d.present), backgroundColor: CHART_COLORS.present },
+        { label: 'Late', data: byDepartment.map(d => d.late), backgroundColor: CHART_COLORS.late }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+  toggleEmpty('chartDepartmentEmpty', !byDepartment.length);
+}
+
+function attendancePctClass(pct) {
+  if (pct >= 90) return 'present';
+  if (pct >= 75) return 'late';
+  return 'absent';
+}
+
+function renderEmployeeRanking(byEmployee, totalWorkingDays) {
+  document.getElementById('empRankNote').textContent = totalWorkingDays
+    ? `Based on ${totalWorkingDays} working day${totalWorkingDays === 1 ? '' : 's'} in the selected range.`
+    : 'No working days in the selected range yet.';
+
+  document.getElementById('empRankBody').innerHTML = byEmployee.map((e, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${e.employeeName} (${e.employeeCode})</td>
+      <td>${e.department || '—'}</td>
+      <td>${e.present}</td>
+      <td>${e.late}</td>
+      <td>${e.absent}</td>
+      <td><span class="badge ${attendancePctClass(e.attendancePercent)}">${e.attendancePercent}%</span></td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="muted">No employees match this filter.</td></tr>';
+}
+
+/* ---------- Bulk Import (CSV) ---------- */
+const CSV_TEMPLATE_HEADERS = ['employeeCode', 'name', 'mobile', 'password', 'department', 'designation', 'joiningDate', 'officeName'];
+
+function downloadCsvTemplate() {
+  const sampleOffice = officesCache[0]?.name || 'Main Office';
+  const rows = [
+    CSV_TEMPLATE_HEADERS.join(','),
+    `EMP101,Jane Doe,01700000001,TempPass1,Sales,Executive,2026-01-15,${sampleOffice}`
+  ];
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'employee_import_template.csv';
+  link.click();
+}
+
+// Minimal CSV parser: handles quoted fields with embedded commas, but not
+// embedded newlines inside a quoted field (fine for this simple row shape).
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+  const parseLine = (line) => {
+    const cells = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (ch === '"') { inQuotes = false; }
+        else { cur += ch; }
+      } else if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { cells.push(cur); cur = ''; }
+      else { cur += ch; }
+    }
+    cells.push(cur);
+    return cells.map((c) => c.trim());
+  };
+  const headers = parseLine(lines[0]).map((h) => h.trim());
+  return lines.slice(1).map((line) => {
+    const cells = parseLine(line);
+    const row = {};
+    headers.forEach((h, i) => { row[h] = cells[i] ?? ''; });
+    return row;
+  });
+}
+
+async function handleBulkCsv(event) {
+  const file = event.target.files[0];
+  event.target.value = ''; // allow re-selecting the same file later
+  if (!file) return;
+  const msg = document.getElementById('bulkImportMsg');
+  msg.innerHTML = '<div class="msg">Reading file…</div>';
+  try {
+    const text = await file.text();
+    const rows = parseCsv(text);
+    if (!rows.length) {
+      msg.innerHTML = '<div class="msg error">No data rows found in that file.</div>';
+      return;
+    }
+    const data = await api('/employees/bulk', { method: 'POST', body: { employees: rows } });
+    let html = `<div class="msg success">Imported ${data.createdCount} of ${rows.length} rows.</div>`;
+    if (data.skipped.length) {
+      html += '<div class="table-wrap"><table><thead><tr><th>Row</th><th>Employee Code</th><th>Reason</th></tr></thead><tbody>' +
+        data.skipped.map(s => `<tr><td>${s.row}</td><td>${s.employeeCode || '—'}</td><td>${s.reason}</td></tr>`).join('') +
+        '</tbody></table></div>';
+    }
+    msg.innerHTML = html;
+    await loadEmployees();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  }
+}
+
+/* ---------- Audit Log ---------- */
+const KNOWN_AUDIT_ACTIONS = [
+  'Login', 'Add Office', 'Edit Office', 'Delete Office', 'Add Employee', 'Edit Employee',
+  'Deactivate Employee', 'Reset Employee Password', 'Unlock Employee Device',
+  'Bulk Import Employees', 'Add Admin', 'Edit Admin', 'Reset Admin Password'
+];
+
+function buildAuditQuery() {
+  const params = new URLSearchParams();
+  const fromDate = document.getElementById('alFromDate').value;
+  const toDate = document.getElementById('alToDate').value;
+  const action = document.getElementById('alAction').value.trim();
+  if (fromDate) params.set('fromDate', fromDate);
+  if (toDate) params.set('toDate', toDate);
+  if (action) params.set('action', action);
+  return params.toString();
+}
+
+function clearAuditFilters() {
+  document.getElementById('alFromDate').value = '';
+  document.getElementById('alToDate').value = '';
+  document.getElementById('alAction').value = '';
+  loadAuditLog();
+}
+
+async function loadAuditLog() {
+  document.getElementById('alActionList').innerHTML = KNOWN_AUDIT_ACTIONS.map(a => `<option value="${a}"></option>`).join('');
+  const data = await api('/audit-log?' + buildAuditQuery());
+  document.getElementById('auditCountNote').textContent =
+    `Showing ${data.rows.length} of ${data.total} matching entries (most recent first).`;
+  document.getElementById('auditBody').innerHTML = data.rows.map(r => `
+    <tr>
+      <td>${new Date(r.timestamp).toLocaleString()}</td>
+      <td>${r.username}</td>
+      <td>${r.action}</td>
+      <td>${r.details || '—'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="muted">No activity recorded yet.</td></tr>';
+}
+
+/* ---------- Admin Account Management (superadmin only) ---------- */
+async function loadAdmins() {
+  const admins = await api('/admins');
+  document.getElementById('adminsBody').innerHTML = admins.map(a => `
+    <tr>
+      <td>${a.username}${a.id === currentAdminId() ? ' <span class="muted">(you)</span>' : ''}</td>
+      <td>${a.email || '—'}</td>
+      <td>${a.role === 'superadmin' ? 'Super Admin' : 'Manager'}</td>
+      <td><span class="badge ${a.active ? 'present' : 'inactive'}">${a.active ? 'Active' : 'Inactive'}</span></td>
+      <td style="white-space:nowrap;">
+        <button class="btn secondary" style="padding:5px 9px;font-size:12px;" onclick="toggleAdminRole(${a.id}, '${a.role}')">
+          Make ${a.role === 'superadmin' ? 'Manager' : 'Super Admin'}
+        </button>
+        <button class="btn secondary" style="padding:5px 9px;font-size:12px;" onclick="resetAdminPassword(${a.id})">Reset PW</button>
+        <button class="btn danger" style="padding:5px 9px;font-size:12px;" onclick="toggleAdminActive(${a.id}, ${a.active})">${a.active ? 'Deactivate' : 'Activate'}</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="muted">No admin accounts yet.</td></tr>';
+}
+
+function currentAdminId() {
+  try {
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(payload)).id;
+  } catch (e) { return null; }
+}
+
+async function addAdmin() {
+  const msg = document.getElementById('adminMsg');
+  msg.innerHTML = '';
+  const body = {
+    username: document.getElementById('aUsername').value.trim(),
+    email: document.getElementById('aEmail').value.trim(),
+    password: document.getElementById('aPassword').value,
+    role: document.getElementById('aRole').value
+  };
+  try {
+    await api('/admins', { method: 'POST', body });
+    msg.innerHTML = '<div class="msg success">Admin added.</div>';
+    ['aUsername', 'aEmail', 'aPassword'].forEach(id => document.getElementById(id).value = '');
+    await loadAdmins();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  }
+}
+
+async function toggleAdminRole(id, currentRole) {
+  const newRole = currentRole === 'superadmin' ? 'manager' : 'superadmin';
+  try {
+    await api(`/admins/${id}`, { method: 'PUT', body: { role: newRole } });
+    await loadAdmins();
+  } catch (e) { alert(e.message); }
+}
+
+async function toggleAdminActive(id, currentlyActive) {
+  try {
+    await api(`/admins/${id}`, { method: 'PUT', body: { active: !currentlyActive } });
+    await loadAdmins();
+  } catch (e) { alert(e.message); }
+}
+
+async function resetAdminPassword(id) {
+  const newPassword = prompt('Enter a new temporary password for this admin:');
+  if (!newPassword) return;
+  try {
+    await api(`/admins/${id}/reset-password`, { method: 'POST', body: { newPassword } });
+    alert('Password reset. Share it with the admin securely.');
+  } catch (e) { alert(e.message); }
+}
+
+if (token) enterApp(); else show('loginScreen');
+</script>
+</body>
+</html>

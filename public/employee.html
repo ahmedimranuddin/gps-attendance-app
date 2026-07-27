@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Attendance — Employee</title>
+<link rel="stylesheet" href="style.css" />
+<script>
+  (function() {
+    var saved = localStorage.getItem('theme');
+    var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  })();
+</script>
+</head>
+<body>
+
+<div id="loginScreen" class="center-screen">
+  <div class="card wrap narrow" style="width:100%;">
+    <h2>Employee Login</h2>
+    <div id="loginMsg"></div>
+    <div class="grid" style="gap:14px;">
+      <div>
+        <label>Employee ID or Mobile Number</label>
+        <input id="loginId" placeholder="e.g. EMP001 or 01700000000" />
+      </div>
+      <div>
+        <label>Password</label>
+        <input id="loginPw" type="password" placeholder="••••••••" />
+      </div>
+      <button class="btn" onclick="doLogin()">Log In</button>
+    </div>
+  </div>
+</div>
+
+<div id="appScreen" class="hidden">
+  <div class="topbar">
+    <h1>Attendance</h1>
+    <div>
+      <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()">Dark mode</button>
+      <button onclick="logout()">Log out</button>
+    </div>
+  </div>
+  <div class="wrap narrow">
+
+    <div class="card" id="dashCard">
+      <h2>Today</h2>
+      <div class="grid cols-2" style="margin-bottom:12px;">
+        <div><div class="muted">Employee</div><div id="dName" style="font-weight:600;">—</div></div>
+        <div><div class="muted">Date / Time</div><div id="dDateTime" style="font-weight:600;">—</div></div>
+      </div>
+      <div class="grid cols-2" style="margin-bottom:14px;">
+        <div class="stat"><div class="num" id="dTotal">0h 0m</div><div class="lbl">Worked today</div></div>
+        <div class="stat"><div class="num" id="dSessionCount">0</div><div class="lbl">Sessions</div></div>
+      </div>
+      <div style="text-align:center;margin-bottom:14px;">
+        <span id="dStatus" class="badge">—</span>
+      </div>
+
+      <div class="table-wrap">
+      <table style="margin-bottom:14px;" id="sessionsTable">
+        <thead><tr><th>In</th><th>Out</th></tr></thead>
+        <tbody id="sessionsBody"></tbody>
+      </table>
+      </div>
+
+      <div id="punchMsg"></div>
+      <button id="punchInBtn" class="punch-btn in" onclick="doPunch('in')">Punch In</button>
+      <button id="punchOutBtn" class="punch-btn out hidden" onclick="doPunch('out')" style="margin-top:10px;">Punch Out</button>
+      <p class="muted" id="gpsHint" style="margin-top:10px;text-align:center;">You can punch in and out more than once a day — total hours worked adds up automatically.</p>
+    </div>
+
+    <div class="card">
+      <h2>Attendance History</h2>
+      <div class="grid cols-2">
+        <div><label>From Date</label><input type="date" id="hFromDate" /></div>
+        <div><label>To Date</label><input type="date" id="hToDate" /></div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" onclick="loadHistory()">Apply</button>
+        <button class="btn secondary" onclick="clearHistoryFilter()">Clear</button>
+        <button class="btn secondary" onclick="downloadMyPDF()">Download PDF</button>
+      </div>
+      <div class="table-wrap">
+      <table style="margin-top:14px;">
+        <thead><tr><th>Date</th><th>First In</th><th>Last Out</th><th>Total</th><th>Status</th></tr></thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = '/api/employee';
+let token = localStorage.getItem('emp_token');
+
+function deviceId() {
+  let id = localStorage.getItem('device_id');
+  if (!id) {
+    id = 'web-' + Math.random().toString(36).slice(2) + Date.now();
+    localStorage.setItem('device_id', id);
+  }
+  return id;
+}
+
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', 'light');
+    document.getElementById('themeToggleBtn').textContent = 'Dark mode';
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('theme', 'dark');
+    document.getElementById('themeToggleBtn').textContent = 'Light mode';
+  }
+}
+
+function show(el) { document.getElementById(el).classList.remove('hidden'); }
+function hide(el) { document.getElementById(el).classList.add('hidden'); }
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      ...(opts.headers || {})
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function doLogin() {
+  const idOrMobile = document.getElementById('loginId').value.trim();
+  const password = document.getElementById('loginPw').value;
+  const msg = document.getElementById('loginMsg');
+  msg.innerHTML = '';
+  if (!idOrMobile || !password) {
+    msg.innerHTML = '<div class="msg error">Enter your ID/mobile and password.</div>';
+    return;
+  }
+  try {
+    const data = await api('/login', { method: 'POST', body: { idOrMobile, password, deviceId: deviceId() } });
+    token = data.token;
+    localStorage.setItem('emp_token', token);
+    enterApp();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  }
+}
+
+function logout() {
+  localStorage.removeItem('emp_token');
+  token = null;
+  hide('appScreen');
+  show('loginScreen');
+}
+
+async function enterApp() {
+  hide('loginScreen');
+  show('appScreen');
+  document.getElementById('themeToggleBtn').textContent =
+    document.documentElement.getAttribute('data-theme') === 'dark' ? 'Light mode' : 'Dark mode';
+  await loadDashboard();
+  await loadHistory();
+}
+
+function badgeClass(status) {
+  if (status === 'Present') return 'present';
+  if (status === 'Late') return 'late';
+  if (status === 'Absent') return 'absent';
+  return '';
+}
+
+async function loadDashboard() {
+  try {
+    const d = await api('/me');
+    document.getElementById('dName').textContent = `${d.name} (${d.employeeCode})`;
+    document.getElementById('dDateTime').textContent = `${d.date} — ${d.time}`;
+    document.getElementById('dTotal').textContent = d.totalToday;
+    document.getElementById('dSessionCount').textContent = d.sessions.length;
+    const statusEl = document.getElementById('dStatus');
+    statusEl.textContent = d.todayStatus;
+    statusEl.className = 'badge ' + badgeClass(d.todayStatus);
+
+    document.getElementById('sessionsBody').innerHTML = d.sessions.map(s => `
+      <tr><td>${s.punchInTime || '--:--'}</td><td>${s.punchOutTime || 'still in'}</td></tr>
+    `).join('') || '<tr><td colspan="2" class="muted">No sessions yet today.</td></tr>';
+
+    if (d.hasOpenSession) {
+      hide('punchInBtn'); show('punchOutBtn');
+      document.getElementById('gpsHint').textContent = 'Currently punched in. Punch out when you leave.';
+    } else {
+      show('punchInBtn'); hide('punchOutBtn');
+      document.getElementById('gpsHint').textContent = d.sessions.length
+        ? 'You can punch in again if you leave and come back.'
+        : 'You can punch in and out more than once a day — total hours worked adds up automatically.';
+    }
+  } catch (e) {
+    if (String(e.message).includes('token')) logout();
+  }
+}
+
+function buildHistoryQuery() {
+  const params = new URLSearchParams();
+  const fromDate = document.getElementById('hFromDate').value;
+  const toDate = document.getElementById('hToDate').value;
+  if (fromDate) params.set('fromDate', fromDate);
+  if (toDate) params.set('toDate', toDate);
+  return params.toString();
+}
+
+function clearHistoryFilter() {
+  document.getElementById('hFromDate').value = '';
+  document.getElementById('hToDate').value = '';
+  loadHistory();
+}
+
+async function loadHistory() {
+  const rows = await api('/history?' + buildHistoryQuery());
+  const body = document.getElementById('historyBody');
+  body.innerHTML = rows.map(r => {
+    const first = r.sessions[0];
+    const last = r.sessions[r.sessions.length - 1];
+    return `
+    <tr>
+      <td>${r.date}</td>
+      <td>${first?.punchInTime || '--:--'}</td>
+      <td>${last?.punchOutTime || 'still in'}</td>
+      <td>${r.totalWorked}</td>
+      <td><span class="badge ${badgeClass(r.status)}">${r.status}</span></td>
+    </tr>
+  `;
+  }).join('') || '<tr><td colspan="5" class="muted">No records yet.</td></tr>';
+}
+
+function downloadMyPDF() {
+  const q = buildHistoryQuery();
+  fetch(API + '/history/export-pdf?' + q, { headers: { Authorization: 'Bearer ' + token } })
+    .then(res => {
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    })
+    .then(blob => {
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'my_attendance_history.pdf';
+      link.click();
+    })
+    .catch(e => alert(e.message));
+}
+
+function getLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('GPS is not supported on this device.'));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos.coords),
+      (err) => reject(new Error('Could not get your location. Please enable GPS/location permission and try again.')),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
+async function doPunch(kind) {
+  const msg = document.getElementById('punchMsg');
+  const btn = document.getElementById(kind === 'in' ? 'punchInBtn' : 'punchOutBtn');
+  msg.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = 'Checking location…';
+  try {
+    const coords = await getLocation();
+    const payload = {
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      accuracy: coords.accuracy,
+      deviceInfo: navigator.userAgent,
+      // Browsers can't reliably detect mock-GPS apps — a native Android build
+      // should set this using Location.isFromMockProvider().
+      mockLocation: false
+    };
+    const data = await api(kind === 'in' ? '/punch-in' : '/punch-out', { method: 'POST', body: payload });
+    msg.innerHTML = `<div class="msg success">Punch ${kind === 'in' ? 'In' : 'Out'} recorded at ${data.punchInTime || data.punchOutTime}.</div>`;
+    await loadDashboard();
+    await loadHistory();
+  } catch (e) {
+    msg.innerHTML = `<div class="msg error">${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = kind === 'in' ? 'Punch In' : 'Punch Out';
+  }
+}
+
+// Auto-login if token exists
+if (token) enterApp(); else show('loginScreen');
+</script>
+</body>
+</html>

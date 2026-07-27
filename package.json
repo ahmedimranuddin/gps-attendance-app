@@ -1,0 +1,21 @@
+{
+  "name": "gps-attendance-app-nextjs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GPS Attendance App — ported to Next.js (App Router)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "seed": "node scripts/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
+    "jsonwebtoken": "^9.0.3",
+    "next": "^14.2.5",
+    "pdfkit": "^0.15.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
